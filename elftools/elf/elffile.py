@@ -7,7 +7,7 @@
 # This code is in the public domain
 #-------------------------------------------------------------------------------
 from ..common.py3compat import BytesIO
-from ..common.exceptions import ELFError
+from ..common.exceptions import ELFError, ELFParseError
 from ..common.utils import struct_parse, elf_assert
 from ..construct import ConstructError
 from .structs import ELFStructs
@@ -46,13 +46,14 @@ class ELFFile(object):
             e_ident_raw:
                 the raw e_ident field of the header
     """
-    def __init__(self, stream):
+    def __init__(self, stream, loadbase=0):
         self.stream = stream
         self._identify_file()
         self.structs = ELFStructs(
             little_endian=self.little_endian,
             elfclass=self.elfclass)
         self.header = self._parse_elf_header()
+        self.loadbase = loadbase
 
         self.stream.seek(0)
         self.e_ident_raw = self.stream.read(16)
@@ -108,6 +109,15 @@ class ELFFile(object):
         """
         for i in range(self.num_segments()):
             yield self.get_segment(i)
+
+    def get_segment_by_address(self, address):
+        address -= self.loadbase
+
+        for segment in self.iter_segments():
+            if segment['p_vaddr'] <= address and segment['p_vaddr'] + segment['p_memsz'] > address:
+                return segment
+
+        return None
 
     def has_dwarf_info(self):
         """ Check whether this file appears to have debugging information.
@@ -329,8 +339,18 @@ class ELFFile(object):
         """ Find the file's string table section
         """
         stringtable_section_num = self['e_shstrndx']
+        try:
+            header = self._get_section_header(stringtable_section_num)
+        except ELFParseError:
+            # this happens for loaded ELFs, where there is no more section headers
+            # -> use DynamicSegment.strtab() and get_segment_by_address,
+            # see DynamicTag for an example
+            # however we'd need to fake a Section object currently, so fix outer code
+            # first
+            return None
+
         return StringTableSection(
-                header=self._get_section_header(stringtable_section_num),
+                header=header,
                 name='',
                 stream=self.stream)
 

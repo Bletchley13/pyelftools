@@ -10,7 +10,8 @@ import itertools
 
 from .sections import Section
 from .segments import Segment
-from ..common.utils import struct_parse
+from ..common.utils import struct_parse, parse_cstring_from_stream
+from ..common.exceptions import ELFError
 
 from .enums import ENUM_D_TAG
 
@@ -28,12 +29,24 @@ class DynamicTag(object):
         ['DT_NEEDED', 'DT_RPATH', 'DT_RUNPATH', 'DT_SONAME',
          'DT_SUNW_FILTER'])
 
-    def __init__(self, entry, elffile):
+    _MANGLED_TAGS = frozenset(
+        ['DT_HASH','DT_GNU_HASH','DT_STRTAB','DT_SYMTAB','DT_DEBUG',
+            'DT_PLTGOT','DT_JMPREL','DT_RELA','DT_VERSYM'])
+
+    def __init__(self, entry, elffile, dyn):
         self.entry = entry
+        self.loadbase = elffile.loadbase
         if entry.d_tag in self._HANDLED_TAGS:
-            dynstr = elffile.get_section_by_name(b'.dynstr')
-            setattr(self, entry.d_tag[3:].lower(),
-                    dynstr.get_string(self.entry.d_val))
+            strtab = dyn.strtab()
+            dynstr = elffile.get_segment_by_address(strtab)
+            if not dynstr:
+                raise ELFError('could not find DT_SYMTAB segment, maybe wrong loadbase?')
+            delta = strtab - elffile.loadbase - dynstr['p_vaddr'] + entry.d_ptr
+            string = parse_cstring_from_stream(elffile.stream, dynstr['p_offset'] + delta)
+            setattr(self, entry.d_tag[3:].lower(), string)
+
+    def ismangled(self):
+        return self.loadbase and self.entry.d_tag in self._MANGLED_TAGS
 
     def __getitem__(self, name):
         """ Implement dict-like access to entries
@@ -61,6 +74,27 @@ class Dynamic(object):
         self._num_tags = -1
         self._offset = position
         self._tagsize = self._elfstructs.Elf_Dyn.sizeof()
+        self._strtab = -1
+
+    def strtab(self):
+        if self._strtab != -1:
+            return self._strtab
+        
+        for n in itertools.count():
+            offset = self._offset + n * self._tagsize
+            entry = struct_parse(
+                self._elfstructs.Elf_Dyn,
+                self._stream,
+                stream_pos=offset)
+
+            if entry.d_tag == 'DT_NULL':
+                break
+
+            if entry.d_tag == 'DT_STRTAB':
+                self._strtab = entry.d_ptr
+                break
+
+        return self._strtab
 
     def iter_tags(self, type=None):
         """ Yield all tags (limit to |type| if specified)
@@ -80,7 +114,7 @@ class Dynamic(object):
             self._elfstructs.Elf_Dyn,
             self._stream,
             stream_pos=offset)
-        return DynamicTag(entry, self._elffile)
+        return DynamicTag(entry, self._elffile, self)
 
     def num_tags(self):
         """ Number of dynamic tags in the file
