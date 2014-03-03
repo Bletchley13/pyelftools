@@ -246,7 +246,8 @@ class DynamicSegment(Segment, Dynamic):
     """
     def __init__(self, header, stream, elffile):
         Segment.__init__(self, header, stream)
-        Dynamic.__init__(self, stream, elffile, self['p_offset'])
+        Dynamic.__init__(self, stream, elffile, \
+                self['p_vaddr'] if elffile.loadbase else self['p_offset'])
 
     def __getitem__(self, name):
         try:
