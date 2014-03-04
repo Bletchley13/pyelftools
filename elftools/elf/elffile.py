@@ -45,7 +45,7 @@ class ELFFile(object):
             e_ident_raw:
                 the raw e_ident field of the header
     """
-    def __init__(self, stream, loadbase=0):
+    def __init__(self, stream, loadbase=None):
         self.stream = stream
         self._identify_file()
         self.structs = ELFStructs(
@@ -59,6 +59,7 @@ class ELFFile(object):
 
         self._file_stringtable_section = self._get_file_stringtable()
         self._section_name_map = None
+        self._min_vaddr = None
 
     def num_sections(self):
         """ Number of sections in the file
@@ -110,10 +111,11 @@ class ELFFile(object):
             yield self.get_segment(i)
 
     def get_segment_by_address(self, address):
-        address -= self.loadbase
-
+        if self.loadbase:
+            address -= self.loadbase
         for segment in self.iter_segments():
-            if segment['p_vaddr'] <= address and segment['p_vaddr'] + segment['p_memsz'] > address:
+            if segment['p_vaddr'] - self.get_min_vaddr() <= address \
+                    and segment['p_vaddr'] - self.get_min_vaddr() + segment['p_memsz'] > address:
                 return segment
 
         return None
@@ -177,6 +179,17 @@ class ELFFile(object):
             return 'AArch64'
         else:
             return '<unknown>'
+
+    def get_min_vaddr(self):
+        if self._min_vaddr == None:
+            self._min_vaddr = float("inf")
+            for n in xrange(self.num_segments()):
+                segment_header = self._get_segment_header(n)
+                if segment_header['p_type'] == 'PT_LOAD' \
+                        and self._min_vaddr > segment_header['p_vaddr']:
+                    self._min_vaddr = segment_header['p_vaddr']
+
+        return self._min_vaddr
 
     #-------------------------------- PRIVATE --------------------------------#
 

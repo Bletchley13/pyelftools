@@ -92,9 +92,14 @@ class DynamicTag(object):
 
             dynstr = elffile.get_segment_by_address(strtab)
             if not dynstr:
-                raise ELFError('could not find DT_STRTAB segment, maybe wrong loadbase?')
-            delta = strtab - elffile.loadbase - dynstr['p_vaddr'] + entry.d_ptr
-            string = parse_cstring_from_stream(elffile.stream, dynstr['p_offset'] + delta)
+                raise ELFError('could not find DT_STRTAB=%x segment, maybe wrong loadbase?' \
+                        % strtab)
+            if elffile.loadbase:
+                off = strtab - (dynstr['p_vaddr'] - elffile.get_min_vaddr()) - elffile.loadbase + dynstr['p_offset']
+            else:
+                off = strtab
+            off += entry.d_ptr
+            string = parse_cstring_from_stream(elffile.stream, off)
             setattr(self, entry.d_tag[3:].lower(), string)
 
         elif entry.d_tag in self._REL_TAGS:
@@ -247,7 +252,8 @@ class DynamicSegment(Segment, Dynamic):
     def __init__(self, header, stream, elffile):
         Segment.__init__(self, header, stream)
         Dynamic.__init__(self, stream, elffile, \
-                self['p_vaddr'] if elffile.loadbase else self['p_offset'])
+                self['p_vaddr'] - elffile.get_min_vaddr() \
+                if elffile.loadbase else self['p_offset'])
 
     def __getitem__(self, name):
         try:
